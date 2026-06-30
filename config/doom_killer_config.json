@@ -1,0 +1,15 @@
+{
+  "target_container": "doom-target",
+  "model_path": "doom_model.onnx",
+  "action": "pause",
+  "poll_interval": 1.0,
+  "anomaly_threshold_base": 0.05,
+  "anomaly_threshold_max": 0.12,
+  "scaling_factor_k": 0.001,
+  "priority_default": 50,
+  "weights": {
+    "uptime": 0.001,
+    "priority": 0.4,
+    "memory": 0.01
+  }
+}
