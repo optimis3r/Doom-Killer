@@ -27,8 +27,6 @@ doomKiller/
 │   └── doom_killer_config.json        # Core daemon config (limits, weights, triggers)
 ├── data/
 │   └── healthyTelemetry.csv           # Telemetry training dataset from healthy workloads
-├── docs/
-│   └── doom_nginx_guide.pdf           # Technical documentation and operations manual
 ├── models/
 │   └── doom_model.onnx                # Compiled Isolation Forest anomaly detection model
 ├── src/
@@ -47,7 +45,8 @@ doomKiller/
 │       └── Dockerfile                 # Docker config for the compute-bound container
 ├── .gitignore                         # Project VCS exclusions
 ├── doom_killer.py                     # Unified Command Line Interface (CLI)
-└── requirements.txt                   # Python package dependencies
+├── requirements.txt                   # Python package dependencies
+└── setup.sh                           # One-shot environment setup script
 ```
 
 ---
@@ -55,25 +54,30 @@ doomKiller/
 ## Prerequisites and Setup
 
 ### System Requirements
-1. **Linux OS**: eBPF probes require a Linux kernel with `CONFIG_BPF`, `CONFIG_BPF_SYSCALL`, and `CONFIG_TRACING` enabled.
-2. **Docker**: Used to run target workloads.
-3. **bpftrace**: The command line utility to execute the eBPF tracepoint scripts.
-   ```bash
-   sudo apt-get install -y bpftrace stdbuf
-   ```
-4. **Apache Bench (ab)**: Used by the data factory for load generation.
-   ```bash
-   sudo apt-get install -y apache2-utils
-   ```
+- **Linux OS** with eBPF support (`CONFIG_BPF`, `CONFIG_BPF_SYSCALL`, `CONFIG_TRACING` enabled in kernel).
+- **Docker** to run target workloads.
+- **Python 3.8+**
 
-### Python Virtual Environment Setup
-1. Activate the workspace virtual environment:
+### Automated Setup (Recommended)
+
+Run the provided setup script once after cloning. It checks all system requirements, installs missing packages, creates the virtual environment, and installs Python dependencies automatically:
+
+```bash
+chmod +x setup.sh && ./setup.sh
+```
+
+### Manual Setup
+
+If you prefer to set up manually:
+
+1. Install system dependencies:
    ```bash
-   source .venv/bin/activate
+   sudo apt-get install -y bpftrace stdbuf apache2-utils
    ```
-2. Install Python requirements:
+2. Create and populate the virtual environment:
    ```bash
-   pip install -r requirements.txt
+   python3 -m venv .venv
+   .venv/bin/pip install -r requirements.txt
    ```
 
 ---
