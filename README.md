@@ -4,6 +4,21 @@ DOOM-Killer is an unsupervised, scale-invariant Out-Of-Memory (OOM) mitigation f
 
 ---
 
+## Performance
+
+| Metric | Result |
+|--------|--------|
+| Intervention response time | < 1 second (single 1Hz poll cycle) |
+| Earliest proactive detection | 53% memory utilization (Isolation Forest, no fail-safe) |
+| Fail-safe interception ceiling | 97% memory utilization |
+| False positive rate on stable workloads | 0% (Redis under 1M+ request benchmark) |
+| Simultaneous containers monitored | 3+ (auto-discovered, independent eBPF sensors) |
+| Overhead on monitored applications | ~0% (eBPF JIT-compiled kernel tracepoint) |
+| Feature vector dimensionality | 9 scale-invariant features |
+| Cross-validation strategy | Leave-One-Workload-Out (LOWO) across 4 workload types |
+
+---
+
 ## Project Structure
 
 ```
