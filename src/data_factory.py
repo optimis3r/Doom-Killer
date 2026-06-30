@@ -48,18 +48,18 @@ def generate_data(output_path, num_runs=100):
         print(f"Run {run_idx}/{num_runs} (Flask leak)...")
 
         # 1. CLEAR OLD CONTAINERS
-        subprocess.run(["docker", "rm", "-f", "psi-target"], capture_output=True)
+        subprocess.run(["docker", "rm", "-f", "doom-target"], capture_output=True)
 
         # 2. START THE FLASK SERVER WITH RANDOM MEMORY LIMIT
         limit_str = random.choice(list(mem_limits.keys()))
         limit_bytes = mem_limits[limit_str]
         subprocess.run([
-            "docker", "run", "-d", "-m", limit_str, "--name", "psi-target", "real-web-server"
+            "docker", "run", "-d", "-m", limit_str, "--name", "doom-target", "real-web-server"
         ], check=True)
 
         # Retrieve container IP address to bypass host iptables/DNAT port-forwarding issues
         ip_result = subprocess.run(
-            ["docker", "inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", "psi-target"],
+            ["docker", "inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", "doom-target"],
             capture_output=True, text=True, check=True
         )
         container_ip = ip_result.stdout.strip()
@@ -69,7 +69,7 @@ def generate_data(output_path, num_runs=100):
 
         # 3. GET DOCKER CONTAINER PID AND CGROUP PATH
         pid_result = subprocess.run(
-            ["docker", "inspect", "-f", "{{.State.Pid}}", "psi-target"],
+            ["docker", "inspect", "-f", "{{.State.Pid}}", "doom-target"],
             capture_output=True, text=True, check=True
         )
         container_pid = pid_result.stdout.strip()
@@ -149,7 +149,7 @@ def generate_data(output_path, num_runs=100):
                     
                     # Check if OOM killed
                     oomCheck = subprocess.run(
-                        ["docker", "inspect", "-f", "{{.State.OOMKilled}}", "psi-target"],
+                        ["docker", "inspect", "-f", "{{.State.OOMKilled}}", "doom-target"],
                         capture_output=True, text=True
                     )
                     if "true" in oomCheck.stdout:
@@ -159,7 +159,7 @@ def generate_data(output_path, num_runs=100):
                         
                     # Check if running
                     statusCheck = subprocess.run(
-                        ["docker", "inspect", "-f", "{{.State.Running}}", "psi-target"],
+                        ["docker", "inspect", "-f", "{{.State.Running}}", "doom-target"],
                         capture_output=True, text=True
                     )
                     if "false" in statusCheck.stdout:
@@ -196,7 +196,7 @@ def generate_data(output_path, num_runs=100):
             load_tester.terminate()
             sensor.wait()
             load_tester.wait()
-            subprocess.run(["docker", "rm", "-f", "psi-target"], capture_output=True)
+            subprocess.run(["docker", "rm", "-f", "doom-target"], capture_output=True)
 
         if not oom_killed:
             print("Skipped (no OOM)")
@@ -258,7 +258,7 @@ def harvest_healthy(output_path, workload_type="all", duration=300, num_runs=3):
     for workload in workloads:
         for run_idx in range(1, num_runs + 1):
             # Clear older container if any exists
-            subprocess.run(["docker", "rm", "-f", "psi-target"], capture_output=True)
+            subprocess.run(["docker", "rm", "-f", "doom-target"], capture_output=True)
 
             limit_str = random.choice(list(mem_limits.keys()))
             limit_bytes = mem_limits[limit_str]
@@ -277,7 +277,7 @@ def harvest_healthy(output_path, workload_type="all", duration=300, num_runs=3):
                     shared_buffers = "64MB"
 
                 subprocess.run([
-                    "docker", "run", "-d", "--name", "psi-target",
+                    "docker", "run", "-d", "--name", "doom-target",
                     "-m", limit_str,
                     "-e", "POSTGRES_PASSWORD=postgres",
                     "postgres:alpine",
@@ -287,7 +287,7 @@ def harvest_healthy(output_path, workload_type="all", duration=300, num_runs=3):
                 print("Waiting for Postgres to initialize...")
                 initialized = False
                 for _ in range(30):
-                    check = subprocess.run(["docker", "exec", "psi-target", "pg_isready", "-U", "postgres"], capture_output=True)
+                    check = subprocess.run(["docker", "exec", "doom-target", "pg_isready", "-U", "postgres"], capture_output=True)
                     if check.returncode == 0:
                         initialized = True
                         break
@@ -300,20 +300,20 @@ def harvest_healthy(output_path, workload_type="all", duration=300, num_runs=3):
                 # Initialize pgbench schema
                 print("Initializing pgbench schema...")
                 subprocess.run([
-                    "docker", "exec", "psi-target",
+                    "docker", "exec", "doom-target",
                     "pgbench", "-i", "-s", "1", "-U", "postgres", "postgres"
                 ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
                 # Start pgbench asynchronously to stress the DB for the run duration
                 print("Starting asynchronous pgbench workload...")
                 subprocess.Popen([
-                    "docker", "exec", "psi-target",
+                    "docker", "exec", "doom-target",
                     "pgbench", "-c", "4", "-T", str(duration + 10), "-U", "postgres", "postgres"
                 ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
             elif workload == "redis":
                 subprocess.run([
-                    "docker", "run", "-d", "--name", "psi-target",
+                    "docker", "run", "-d", "--name", "doom-target",
                     "-m", limit_str,
                     "redis:alpine"
                 ], check=True)
@@ -323,22 +323,22 @@ def harvest_healthy(output_path, workload_type="all", duration=300, num_runs=3):
                 # Run redis-benchmark asynchronously for read/write churn
                 print("Starting asynchronous redis-benchmark...")
                 subprocess.Popen([
-                    "docker", "exec", "psi-target",
+                    "docker", "exec", "doom-target",
                     "redis-benchmark", "-c", "10", "-t", "set,get", "-n", "10000000", "--quiet"
                 ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
             elif workload == "compute":
                 # Ensure local compute image is built
-                img_check = subprocess.run(["docker", "image", "inspect", "psi-compute"], capture_output=True)
+                img_check = subprocess.run(["docker", "image", "inspect", "doom-compute"], capture_output=True)
                 if img_check.returncode != 0:
                     compute_dir = os.path.join(PROJECT_ROOT, "target_app", "compute_job")
-                    print(f"Docker image 'psi-compute' not found. Building from {compute_dir}...")
-                    subprocess.run(["docker", "build", "-t", "psi-compute", compute_dir], check=True)
+                    print(f"Docker image 'doom-compute' not found. Building from {compute_dir}...")
+                    subprocess.run(["docker", "build", "-t", "doom-compute", compute_dir], check=True)
 
                 subprocess.run([
-                    "docker", "run", "-d", "--name", "psi-target",
+                    "docker", "run", "-d", "--name", "doom-target",
                     "-m", limit_str,
-                    "psi-compute"
+                    "doom-compute"
                 ], check=True)
 
                 time.sleep(2)
@@ -351,7 +351,7 @@ def harvest_healthy(output_path, workload_type="all", duration=300, num_runs=3):
                     subprocess.run(["docker", "build", "-t", "real-web-server", target_app_dir], check=True)
 
                 subprocess.run([
-                    "docker", "run", "-d", "--name", "psi-target",
+                    "docker", "run", "-d", "--name", "doom-target",
                     "-m", limit_str,
                     "real-web-server"
                 ], check=True)
@@ -360,7 +360,7 @@ def harvest_healthy(output_path, workload_type="all", duration=300, num_runs=3):
 
                 # Retrieve container IP address to bypass host iptables/DNAT port-forwarding issues
                 ip_result = subprocess.run(
-                    ["docker", "inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", "psi-target"],
+                    ["docker", "inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", "doom-target"],
                     capture_output=True, text=True, check=True
                 )
                 container_ip = ip_result.stdout.strip()
@@ -373,7 +373,7 @@ def harvest_healthy(output_path, workload_type="all", duration=300, num_runs=3):
 
             # Retrieve PID and cgroup path
             pid_result = subprocess.run(
-                ["docker", "inspect", "-f", "{{.State.Pid}}", "psi-target"],
+                ["docker", "inspect", "-f", "{{.State.Pid}}", "doom-target"],
                 capture_output=True, text=True, check=True
             )
             container_pid = pid_result.stdout.strip()
@@ -389,7 +389,7 @@ def harvest_healthy(output_path, workload_type="all", duration=300, num_runs=3):
 
             if not cgroup_path:
                 print("Failed to resolve container cgroup path. Skipping this run...")
-                subprocess.run(["docker", "rm", "-f", "psi-target"], capture_output=True)
+                subprocess.run(["docker", "rm", "-f", "doom-target"], capture_output=True)
                 continue
 
             full_cgroup_path = f"/sys/fs/cgroup{cgroup_path}" if cgroup_path.startswith("/") else f"/sys/fs/cgroup/{cgroup_path}"
@@ -445,7 +445,7 @@ def harvest_healthy(output_path, workload_type="all", duration=300, num_runs=3):
 
                         # Check if container is still running
                         statusCheck = subprocess.run(
-                            ["docker", "inspect", "-f", "{{.State.Running}}", "psi-target"],
+                            ["docker", "inspect", "-f", "{{.State.Running}}", "doom-target"],
                             capture_output=True, text=True
                         )
                         if "false" in statusCheck.stdout:
@@ -474,7 +474,7 @@ def harvest_healthy(output_path, workload_type="all", duration=300, num_runs=3):
                 print("Cleaning up...")
                 sensor.terminate()
                 sensor.wait()
-                subprocess.run(["docker", "rm", "-f", "psi-target"], capture_output=True)
+                subprocess.run(["docker", "rm", "-f", "doom-target"], capture_output=True)
 
             if aborted:
                 print("Discarded run")

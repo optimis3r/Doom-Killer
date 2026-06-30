@@ -33,23 +33,19 @@ Examples:
     
     subparsers = parser.add_subparsers(dest="command", required=True, help="Subcommands")
     
-    # Run Subcommand
     run_parser = subparsers.add_parser("run", help="Run the OOM mitigation daemon")
     run_parser.add_argument("-c", "--config", help="Path to the config file (json)")
     run_parser.add_argument("-m", "--model", help="Path to the ONNX model file (overrides config)")
-    run_parser.add_argument("-t", "--target", help="Target container name to monitor (overrides config)")
+    run_parser.add_argument("-t", "--target", default="all", help="Target container name to monitor, or 'all' to monitor all (default: all)")
     
-    # Train Subcommand
     train_parser = subparsers.add_parser("train", help="Train the anomaly detection model")
     train_parser.add_argument("-d", "--data", default="data/healthyTelemetry.csv", help="Path to input training CSV (default: data/healthyTelemetry.csv)")
     train_parser.add_argument("-o", "--output", default="models/doom_model.onnx", help="Path to output ONNX model (default: models/doom_model.onnx)")
     
-    # Generate-data Subcommand
     gen_parser = subparsers.add_parser("generate-data", help="Run the simulated telemetry generator")
     gen_parser.add_argument("-o", "--output", default="data/crashValidationData.csv", help="Path to write output training CSV (default: data/crashValidationData.csv)")
     gen_parser.add_argument("-n", "--runs", type=int, default=100, help="Number of simulation runs to execute (default: 100)")
 
-    # Harvest-healthy Subcommand
     harvest_parser = subparsers.add_parser("harvest-healthy", help="Harvest healthy telemetry across different workloads")
     harvest_parser.add_argument("-o", "--output", default="data/healthyTelemetry.csv", help="Path to write healthy telemetry CSV (default: data/healthyTelemetry.csv)")
     harvest_parser.add_argument("-w", "--workload", choices=["postgres", "redis", "compute", "flask", "all"], default="all", help="Workload type to harvest (default: all)")

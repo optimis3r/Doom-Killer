@@ -21,26 +21,24 @@ from .utils import (
     get_container_memory_stats
 )
 
-def load_config(config_path=None):
-    """
+"""
     Search paths order for the configuration:
-    1. config_path parameter if specified
-    2. current directory ./doom_killer_config.json (or ./psi_guard_config.json)
+    1. config_path parameter (need to specify)
+    2. current directory ./doom_killer_config.json
     3. config/doom_killer_config.json relative to project root
-    """
+"""
+
+def load_config(config_path=None):
     search_paths = []
     if config_path:
         search_paths.append(config_path)
     
     search_paths.append("doom_killer_config.json")
-    search_paths.append("psi_guard_config.json")
     
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(script_dir)
     search_paths.append(os.path.join(project_root, "config", "doom_killer_config.json"))
-    search_paths.append(os.path.join(project_root, "config", "psi_guard_config.json"))
     search_paths.append(os.path.join(project_root, "doom_killer_config.json"))
-    search_paths.append(os.path.join(project_root, "psi_guard_config.json"))
     
     for path in search_paths:
         if os.path.exists(path):
@@ -74,19 +72,33 @@ def enqueue_output(out, q):
         q.put(line)
     out.close()
 
+"""
+    Monitoring running Docker container using eBPF and predicting OOM using ONNX runtime.
+    Freezes container if OOM is predicted soon.
+"""
+
+def get_running_containers():
+    """
+    Returns a list of running Docker container names.
+    """
+    try:
+        res = subprocess.run(["docker", "ps", "--format", "{{.Names}}"], capture_output=True, text=True, check=True)
+        names = [n.strip() for n in res.stdout.splitlines() if n.strip()]
+        return names
+    except Exception as e:
+        print(f"Warning: Failed to get running Docker containers: {e}")
+        return []
+
 def run_daemon(config_path=None, model_path_override=None, target_override=None):
-    """
-    Monitors a running Docker container using eBPF and predicts OOM using ONNX runtime.
-    Freezes the container if OOM is predicted soon.
-    """
     if os.geteuid() != 0:
-        print("Error: must be run as root (sudo)")
+        print("Error: must run as root (sudo)")
         sys.exit(1)
 
     print("Starting DOOM-Killer...")
 
     config = load_config(config_path)
     target = target_override if target_override else config.get("target_container", "doom-target")
+    auto_discovery = (target.lower() in ["all", "auto", "any"])
     
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(script_dir)
@@ -110,119 +122,159 @@ def run_daemon(config_path=None, model_path_override=None, target_override=None)
     session = ort.InferenceSession(model_path)
     input_name = session.get_inputs()[0].name
     
-    # IsolationForest outputs ['label', 'scores']. We want 'scores' which corresponds to decision_function.
+    # IsolationForest will output ['label', 'scores']. We want 'scores' which corresponds to decision_function.
     output_names = [o.name for o in session.get_outputs()]
     output_name = 'scores' if 'scores' in output_names else output_names[0]
     
-    print(f"Waiting for target container: {target}")
-    pid, cgroup_path, full_cgroup_path = None, None, None
-    while True:
-        pid, cgroup_path, full_cgroup_path = get_container_cgroup_info(target)
-        if pid:
-            break
-        time.sleep(2)
-        
-    print(f"Target container detected (PID: {pid})")
-    print(f"Cgroup: {full_cgroup_path}")
-
-    # Build and run the bpftrace subprocess
-    ebpf_script = f'tracepoint:kmem:mm_page_alloc /cgroup == cgroupid("{full_cgroup_path}")/ {{ @allocations = count(); }} interval:s:1 {{ print(@allocations); clear(@allocations); }}'
-    print("Attaching eBPF probe...")
+    active_trackers = {}
+    poll_interval = float(config.get("poll_interval", 1.0))
     
-    sensor = subprocess.Popen(
-        ["stdbuf", "-oL", "bpftrace", "-e", ebpf_script],
-        stdout=subprocess.PIPE,
-        stderr=None,
-        text=True,
-        bufsize=1
-    )
-    
-    # Read bpftrace stdout asynchronously in a separate thread to avoid blocking issues
-    q = queue.Queue()
-    t = threading.Thread(target=enqueue_output, args=(sensor.stdout, q))
-    t.daemon = True
-    t.start()
-    
-    preprocessor = FeaturePreprocessor()
-    
-    print("Monitoring active")
-    
-    mem_limit_bytes = get_container_memory_limit(full_cgroup_path)
-    if not mem_limit_bytes or mem_limit_bytes == 0:
-        mem_limit_bytes = 256 * 1024 * 1024
-        print("Warning: no memory limit detected, using default 256MB scale")
+    if auto_discovery:
+        print("Mode: Host-wide Auto-discovery (monitoring all running containers)")
     else:
-        print(f"Memory limit: {mem_limit_bytes / (1024 * 1024):.1f}MB")
+        print(f"Mode: Single Target (monitoring container: {target})")
         
-    paused = False
-    
     try:
-        while sensor.poll() is None:
-            try:
-                line = q.get(timeout=2.0)
-            except queue.Empty:
-                continue
+        while True:
+            # 1. Resolve current active container targets
+            if auto_discovery:
+                current_targets = get_running_containers()
+            else:
+                # Check if target is running
+                pid, cgroup_path, full_cgroup_path = get_container_cgroup_info(target)
+                current_targets = [target] if pid else []
                 
-            line = line.strip()
-            if "@allocations:" in line:
-                try:
-                    velocity = int(line.split(":")[1].strip())
-                except (ValueError, IndexError):
+            # Stop trackers for containers that are no longer running
+            for name in list(active_trackers.keys()):
+                if name not in current_targets:
+                    print(f"Stopped monitoring: {name}")
+                    tracker = active_trackers[name]
+                    tracker["sensor"].terminate()
+                    tracker["sensor"].wait()
+                    del active_trackers[name]
+                    
+            # Initialize trackers for newly detected containers
+            for name in current_targets:
+                if name not in active_trackers:
+                    uptime_sec, priority, already_paused = get_container_metadata(name, config.get("priority_default", 50))
+                    if already_paused:
+                        continue
+                        
+                    pid, cgroup_path, full_cgroup_path = get_container_cgroup_info(name)
+                    if not pid:
+                        continue
+                        
+                    ebpf_script = f'tracepoint:kmem:mm_page_alloc /cgroup == cgroupid("{full_cgroup_path}")/ {{ @allocations = count(); }} interval:s:1 {{ print(@allocations); clear(@allocations); }}'
+                    try:
+                        sensor = subprocess.Popen(
+                            ["stdbuf", "-oL", "bpftrace", "-e", ebpf_script],
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL,
+                            text=True,
+                            bufsize=1
+                        )
+                    except Exception as e:
+                        print(f"Warning: failed to start eBPF sensor for {name}: {e}")
+                        continue
+                        
+                    q = queue.Queue()
+                    t = threading.Thread(target=enqueue_output, args=(sensor.stdout, q))
+                    t.daemon = True
+                    t.start()
+                    
+                    mem_limit_bytes = get_container_memory_limit(full_cgroup_path)
+                    if not mem_limit_bytes or mem_limit_bytes == 0:
+                        mem_limit_bytes = 256 * 1024 * 1024
+                        
+                    active_trackers[name] = {
+                        "pid": pid,
+                        "full_cgroup_path": full_cgroup_path,
+                        "sensor": sensor,
+                        "queue": q,
+                        "thread": t,
+                        "preprocessor": FeaturePreprocessor(),
+                        "mem_limit_bytes": mem_limit_bytes,
+                        "paused": False
+                    }
+                    print(f"Monitoring container: {name} (limit={mem_limit_bytes / (1024*1024):.1f}MB)")
+                    
+            # 2. Process metrics and inference for all running trackers
+            for name, tracker in list(active_trackers.items()):
+                if tracker["sensor"].poll() is not None:
+                    print(f"Warning: sensor for {name} died. Removing.")
+                    del active_trackers[name]
                     continue
-                
-                # Check container metadata and state
-                uptime_sec, priority, already_paused = get_container_metadata(target, config.get("priority_default", 50))
-                
+                    
+                # Read all lines from queue to get the latest allocation velocity
+                velocity = 0
+                while True:
+                    try:
+                        line = tracker["queue"].get_nowait()
+                        line = line.strip()
+                        if "@allocations:" in line:
+                            try:
+                                velocity = int(line.split(":")[1].strip())
+                            except (ValueError, IndexError):
+                                pass
+                    except queue.Empty:
+                        break
+                        
+                uptime_sec, priority, already_paused = get_container_metadata(name, config.get("priority_default", 50))
                 if already_paused:
-                    if not paused:
-                        print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Container '{target}' is already paused.")
-                        paused = True
+                    if not tracker["paused"]:
+                        print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] [{name}] Container is paused.")
+                        tracker["paused"] = True
                     continue
-                
-                # Query current memory usage from cgroup
-                mem_bytes = get_container_memory_usage(full_cgroup_path)
+                    
+                full_path = tracker["full_cgroup_path"]
+                mem_bytes = get_container_memory_usage(full_path)
                 mem_mb = mem_bytes / (1024 * 1024)
+                mem_limit_bytes = tracker["mem_limit_bytes"]
                 
-                # Query memory.stat fields
-                pgmajfault, anon, file_mem = get_container_memory_stats(full_cgroup_path)
-
-                # Compute scale-invariant features
-                features = preprocessor.get_features(velocity, mem_bytes, mem_limit_bytes, pgmajfault, anon, file_mem)
+                pgmajfault, anon, file_mem = get_container_memory_stats(full_path)
                 
-                # Predict anomaly score using ONNX (sign convention: anomaly_score = -decision_score)
+                features = tracker["preprocessor"].get_features(
+                    velocity, mem_bytes, mem_limit_bytes, pgmajfault, anon, file_mem
+                )
+                
                 input_data = np.array([features], dtype=np.float32)
                 out = session.run([output_name], {input_name: input_data})
                 decision_score = float(out[0][0][0])
                 anomaly_score = -decision_score
                 
-                # Regret calculations
                 regret = calculate_regret(uptime_sec, priority, mem_mb, config.get("weights", {}))
                 trigger_threshold = calculate_trigger_threshold(regret, config)
                 
-                # Log metrics cleanly
-                print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] "
+                print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] [{name}] "
                       f"allocs/s: {velocity:6d} | "
                       f"mem: {mem_mb:6.1f}MB | "
                       f"regret: {regret:5.1f} | "
                       f"thresh: {trigger_threshold:6.4f} | "
                       f"anomaly: {anomaly_score:6.4f}")
                       
-                # Evaluate Intervention
                 failsafe_trigger = False
                 if mem_limit_bytes and mem_bytes >= 0.97 * mem_limit_bytes and velocity > 5000:
-                    print(f"\n[FAIL-SAFE] Memory critical ({mem_mb:.1f}MB / {mem_limit_bytes / (1024 * 1024):.1f}MB) | allocs/s: {velocity} (overriding prediction)")
+                    print(f"\n[FAIL-SAFE] [{name}] Memory critical ({mem_mb:.1f}MB / {mem_limit_bytes / (1024 * 1024):.1f}MB) | allocs/s: {velocity} (overriding prediction)")
                     failsafe_trigger = True
                     
                 if failsafe_trigger or (anomaly_score > trigger_threshold):
-                    success = pause_container(target)
+                    success = pause_container(name)
                     if success:
-                        paused = True
-                        break
+                        tracker["paused"] = True
+                        tracker["sensor"].terminate()
+                        tracker["sensor"].wait()
+                        del active_trackers[name]
                         
+            time.sleep(poll_interval)
+            
     except KeyboardInterrupt:
         print("\nExiting...")
     finally:
-        print("Cleaning up sensor...")
-        sensor.terminate()
-        sensor.wait()
+        print("Cleaning up sensors...")
+        for name, tracker in list(active_trackers.items()):
+            try:
+                tracker["sensor"].terminate()
+                tracker["sensor"].wait()
+            except Exception:
+                pass
         print("Done")

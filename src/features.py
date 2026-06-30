@@ -11,25 +11,24 @@ class FeaturePreprocessor:
         self.cache_to_rss_ratios = []
 
     def get_features(self, velocity, mem_bytes, limit_bytes, pgmajfault, anon, file):
-        # Prevent division by zero if limit is not loaded
         if not limit_bytes or limit_bytes == 0:
             limit_bytes = 256 * 1024 * 1024
             
-        # 1. Remaining Memory Ratio (headroom)
+        # Remaining Memory Ratio (headroom)
         rem_mem_ratio = float(limit_bytes - mem_bytes) / float(limit_bytes)
         
-        # 2. Relative Velocity: Fraction of limit allocated per second (1 page = 4096 bytes)
+        # Relative Velocity: Fraction of limit allocated per second (1 page = 4096 bytes)
         rel_v = float(velocity * 4096) / float(limit_bytes)
         self.rel_velocities.append(rel_v)
         
-        # 3. Relative Acceleration
+        # Relative Acceleration
         if len(self.rel_velocities) == 1:
             rel_a = 0.0
         else:
             rel_a = float(rel_v - self.rel_velocities[-2])
         self.rel_accelerations.append(rel_a)
         
-        # 4. Major page fault rate (diff per second)
+        # Major page fault rate (diff per second)
         if self.prev_pgmajfault is None:
             majfault_rate = 0.0
         else:
@@ -37,7 +36,7 @@ class FeaturePreprocessor:
         self.prev_pgmajfault = pgmajfault
         self.majfault_rates.append(majfault_rate)
 
-        # 5. Cache-to-RSS ratio (file / anon)
+        # Cache-to-RSS ratio (file / anon)
         if anon <= 0:
             cache_to_rss = float(file)
         else:
@@ -54,7 +53,7 @@ class FeaturePreprocessor:
         if len(self.cache_to_rss_ratios) > 3:
             self.cache_to_rss_ratios.pop(0)
             
-        # 6. Rolling averages (window=3)
+        # Rolling averages (window=3)
         n = len(self.rel_velocities)
         if n < 3:
             rel_v_roll_3 = float(rel_v)

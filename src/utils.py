@@ -4,11 +4,12 @@ import json
 import time
 import datetime
 
-def get_container_cgroup_info(container_name):
-    """
+"""
     Retrieves the PID, relative cgroup path, and absolute cgroup v2 path
     for a given running Docker container.
-    """
+"""
+
+def get_container_cgroup_info(container_name):
     try:
         pid_result = subprocess.run(
             ["docker", "inspect", "-f", "{{.State.Pid}}", container_name],
@@ -40,10 +41,11 @@ def get_container_cgroup_info(container_name):
     except Exception:
         return None, None, None
 
-def get_container_metadata(container_name, default_priority):
-    """
+"""
     Fetches running metadata of the container: Uptime (seconds), priority, and paused state.
-    """
+"""
+
+def get_container_metadata(container_name, default_priority):
     try:
         res = subprocess.run(
             ["docker", "inspect", "-f", '{"StartedAt": "{{.State.StartedAt}}", "Labels": {{json .Config.Labels}}, "Paused": {{.State.Paused}}}', container_name],
@@ -68,8 +70,6 @@ def get_container_metadata(container_name, default_priority):
         priority_key = None
         if "doom-killer.priority" in labels:
             priority_key = "doom-killer.priority"
-        elif "psi-guard.priority" in labels:
-            priority_key = "psi-guard.priority"
             
         if priority_key:
             try:
@@ -83,9 +83,6 @@ def get_container_metadata(container_name, default_priority):
         return 0.0, default_priority, False
 
 def get_container_memory_usage(full_cgroup_path):
-    """
-    Reads the current memory usage of the container's cgroup in bytes.
-    """
     try:
         mem_path = os.path.join(full_cgroup_path, "memory.current")
         if os.path.exists(mem_path):
@@ -96,9 +93,6 @@ def get_container_memory_usage(full_cgroup_path):
         return 0
 
 def get_container_memory_limit(full_cgroup_path):
-    """
-    Reads the memory limit of the container's cgroup in bytes (returns None if unlimited).
-    """
     try:
         max_path = os.path.join(full_cgroup_path, "memory.max")
         if os.path.exists(max_path):
@@ -112,9 +106,6 @@ def get_container_memory_limit(full_cgroup_path):
         return None
 
 def calculate_regret(uptime_seconds, priority, mem_mb, weights):
-    """
-    Computes regret for intervention: R = w1 * Uptime + w2 * Priority - w3 * Mem
-    """
     w_1 = weights.get("uptime", 0.001)
     w_2 = weights.get("priority", 0.4)
     w_3 = weights.get("memory", 0.01)
@@ -123,10 +114,6 @@ def calculate_regret(uptime_seconds, priority, mem_mb, weights):
     return regret
 
 def calculate_trigger_threshold(regret, config):
-    """
-    Computes the dynamic anomaly threshold: Thresh = Base + (k * Regret)
-    Bounded by a safety maximum (so we don't delay mitigation indefinitely).
-    """
     base = config.get("anomaly_threshold_base", config.get("tto_threshold_base", 0.05))
     max_safety = config.get("anomaly_threshold_max", config.get("tto_threshold_min", 0.12))
     k = config.get("scaling_factor_k", 0.001)
@@ -134,10 +121,8 @@ def calculate_trigger_threshold(regret, config):
     threshold = base + (k * regret)
     return min(max_safety, threshold)
 
+# acutator will pause and freeze
 def pause_container(container_name):
-    """
-    Actuator: Pauses/freezes the container.
-    """
     print(f"\n[ACTUATOR] Freezing {container_name}")
     res = subprocess.run(["docker", "pause", container_name], capture_output=True, text=True)
     if res.returncode == 0:
@@ -149,10 +134,6 @@ def pause_container(container_name):
 
 
 def get_container_memory_stats(full_cgroup_path):
-    """
-    Reads the memory.stat file for a cgroup and extracts:
-    pgmajfault, anon, and file memory metrics.
-    """
     pgmajfault = 0
     anon = 0
     file = 0

@@ -7,7 +7,6 @@ def main():
     print("Compute job started...", flush=True)
     while True:
         try:
-            # Random size to vary memory usage dynamically but bounded
             size = random.randint(500, 2000)
             a = np.random.rand(size, size).astype(np.float32)
             b = np.random.rand(size, size).astype(np.float32)
